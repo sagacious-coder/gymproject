@@ -35,14 +35,21 @@ An ultra-modern, fluid fitness tracking application built with **React Native (E
    npm install
    ```
 
-2. **Setup Supabase**:
+2. **Setup Supabase & AI Keys**:
    - Create a project on [Supabase](https://supabase.com).
    - Paste the SQL script from `supabase/schema.sql` into the Supabase SQL Editor and run it.
-   - Copy your Project URL and Anon Key into `.env`:
+   - Copy your credentials into `.env`:
      ```env
      EXPO_PUBLIC_SUPABASE_URL=https://your-project.supabase.co
      EXPO_PUBLIC_SUPABASE_ANON_KEY=your-anon-key
+     EXPO_PUBLIC_GROQ_API_KEY=gsk_your_groq_api_key_here
+     EXPO_PUBLIC_GEMINI_API_KEY=your_gemini_api_key_here
      ```
+
+## Features Implemented
+- **AI Voice-Dump**: High-speed audio recording via `expo-audio` -> Groq Whisper -> Llama 3 70B extraction.
+- **Multimodal Eyes**: Photo & PDF document ingestion via `expo-image-picker` & `expo-document-picker` -> Google Gemini 1.5 Flash -> auto-classification (meals vs bloodwork / routines).
+- **Polymorphic Database**: Flexible PostgreSQL schema with JSONB GIN indexing and RLS security.
 
 3. **Start the Expo App**:
    ```bash

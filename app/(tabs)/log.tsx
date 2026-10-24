@@ -16,14 +16,24 @@ import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import Animated, { FadeInUp, FadeInDown, Layout } from 'react-native-reanimated';
 import { useAudioRecorder, RecordingPresets, AudioModule } from 'expo-audio';
+import * as DocumentPicker from 'expo-document-picker';
+import * as ImagePicker from 'expo-image-picker';
 import { GlowingMicButton } from '../../components/GlowingMicButton';
 import { GlassCard } from '../../components/GlassCard';
-import { processAudioInput, extractJSONFromText, commitWorkoutToSupabase, commitMealToSupabase } from '../../services/aiLoggingService';
+import {
+  processAudioInput,
+  processDocumentInput,
+  extractJSONFromText,
+  commitWorkoutToSupabase,
+  commitMealToSupabase,
+  AIResponsePayload,
+} from '../../services/aiLoggingService';
 import { useAuth } from '../../hooks/useAuth';
 
 export default function LogScreen() {
   const { user } = useAuth();
   const [isProcessing, setIsProcessing] = useState(false);
+  const [processingStatus, setProcessingStatus] = useState<string>('AI is analyzing your session...');
   const [textInput, setTextInput] = useState('');
   const [activeMode, setActiveMode] = useState<'all' | 'workout' | 'nutrition' | 'document'>('all');
   const [parsedPreview, setParsedPreview] = useState<{
@@ -33,52 +43,22 @@ export default function LogScreen() {
     details: Array<{ label: string; value: string }>;
   } | null>(null);
 
-  // Initialize the new expo-audio hook-based recorder with high quality presets
+  // Initialize expo-audio recorder with high-quality preset
   const audioRecorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
 
-  // Toggle voice recording using expo-audio and process through Groq Whisper & Llama 3
+  // 1. Toggle voice recording via expo-audio & Groq Whisper
   const toggleRecording = async () => {
     if (audioRecorder.isRecording) {
-      // 1. Stop recording
       audioRecorder.stop();
       setIsProcessing(true);
+      setProcessingStatus('Transcribing with Groq Whisper & Llama 3...');
 
       try {
         const audioUri = audioRecorder.uri;
         if (audioUri && user) {
-          // 2. Stream audio to Groq Whisper and extract structured schema with Llama 3
           const { transcript, structuredData } = await processAudioInput(user.id, audioUri);
-
-          // 3. Render live preview breakdown card
-          if (structuredData.intent === 'LOG_WORKOUT' && structuredData.workout_data) {
-            const act = structuredData.workout_data.activities?.[0];
-            setParsedPreview({
-              type: 'workout',
-              title: structuredData.workout_data.session.title || 'Workout Session',
-              summary: structuredData.workout_data.session.ai_summary || transcript,
-              details: [
-                { label: 'Activity', value: act?.name || 'Workout' },
-                { label: 'Sets Logged', value: `${act?.metrics?.length || 1} set(s)` },
-                { label: 'Transcript', value: `"${transcript}"` },
-              ],
-            });
-            Alert.alert('Success', 'Workout session analyzed and committed to Supabase!');
-          } else if (structuredData.intent === 'LOG_NUTRITION' && structuredData.nutrition_data) {
-            const meal = structuredData.nutrition_data.meal;
-            setParsedPreview({
-              type: 'nutrition',
-              title: meal.description || 'Meal Logged',
-              summary: `${meal.calories} kcal | ${meal.protein}g Protein | ${meal.carbs}g Carbs | ${meal.fats}g Fats`,
-              details: [
-                { label: 'Meal Type', value: meal.meal_type },
-                { label: 'Calories', value: `${meal.calories} kcal` },
-                { label: 'Macros', value: `${meal.protein}P / ${meal.carbs}C / ${meal.fats}F` },
-              ],
-            });
-            Alert.alert('Success', 'Meal and nutritional macros saved to Supabase!');
-          } else {
-            Alert.alert('AI Parsed', `Recognized intent: ${structuredData.intent}`);
-          }
+          handleExtractionPreview(structuredData, transcript);
+          Alert.alert('Success', 'Audio successfully processed and logged to Supabase!');
         }
       } catch (error: any) {
         Alert.alert('Processing Error', error?.message || 'Failed to process audio. Please try again.');
@@ -87,7 +67,6 @@ export default function LogScreen() {
         setIsProcessing(false);
       }
     } else {
-      // 4. Request microphone permissions and start recording
       const permission = await AudioModule.requestRecordingPermissionsAsync();
       if (permission.granted) {
         audioRecorder.record();
@@ -97,18 +76,100 @@ export default function LogScreen() {
     }
   };
 
-  // Alternative manual text submission through the LLM parser
+  // 2. Pick and scan PDF or Image document via Gemini 1.5 Flash
+  const pickDocument = async () => {
+    if (!user) {
+      Alert.alert('Authentication Required', 'Please ensure you are signed in.');
+      return;
+    }
+
+    try {
+      const result = await DocumentPicker.getDocumentAsync({
+        type: ['application/pdf', 'image/*'],
+        copyToCacheDirectory: true,
+      });
+
+      if (result.canceled || !result.assets || result.assets.length === 0) {
+        return;
+      }
+
+      const asset = result.assets[0];
+      const fileUri = asset.uri;
+      const mimeType =
+        asset.mimeType ||
+        (asset.name.toLowerCase().endsWith('.pdf') ? 'application/pdf' : 'image/jpeg');
+
+      setIsProcessing(true);
+      setProcessingStatus('Analyzing document with Gemini 1.5 Flash...');
+
+      const aiData = await processDocumentInput(user.id, fileUri, mimeType);
+      handleExtractionPreview(aiData, asset.name);
+      Alert.alert('Success', 'Document successfully analyzed and saved to Supabase!');
+    } catch (error: any) {
+      Alert.alert('Document Error', error?.message || 'Failed to analyze document with Gemini.');
+      console.error('Pick Document Error:', error);
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  // 3. Take photo with device camera (e.g. meal or workout sheet) via Gemini 1.5 Flash
+  const takePhoto = async () => {
+    if (!user) {
+      Alert.alert('Authentication Required', 'Please ensure you are signed in.');
+      return;
+    }
+
+    try {
+      const permission = await ImagePicker.requestCameraPermissionsAsync();
+      if (!permission.granted) {
+        Alert.alert('Permission Denied', 'Camera permission is required to scan meals or documents.');
+        return;
+      }
+
+      const result = await ImagePicker.launchCameraAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        allowsEditing: true,
+        quality: 0.8,
+      });
+
+      if (result.canceled || !result.assets || result.assets.length === 0) {
+        return;
+      }
+
+      const asset = result.assets[0];
+      const fileUri = asset.uri;
+      const mimeType = asset.mimeType || 'image/jpeg';
+
+      setIsProcessing(true);
+      setProcessingStatus('Gemini 1.5 Flash is calculating nutrition macros...');
+
+      const aiData = await processDocumentInput(user.id, fileUri, mimeType);
+      handleExtractionPreview(aiData, 'Camera Snapshot');
+      Alert.alert('Success', 'Photo analyzed and committed to Supabase!');
+    } catch (error: any) {
+      Alert.alert('Camera Error', error?.message || 'Failed to analyze photo with Gemini.');
+      console.error('Take Photo Error:', error);
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  // 4. Manual text submission alternative
   const handleTextSubmit = async () => {
     if (!textInput.trim() || !user) return;
     setIsProcessing(true);
+    setProcessingStatus('Structuring log with AI...');
 
     try {
       const structuredData = await extractJSONFromText(textInput);
       if (structuredData.intent === 'LOG_WORKOUT' && structuredData.workout_data) {
         await commitWorkoutToSupabase(user.id, structuredData.workout_data, textInput);
+        handleExtractionPreview(structuredData, textInput);
         Alert.alert('Success', 'Workout logged from text input!');
       } else if (structuredData.intent === 'LOG_NUTRITION' && structuredData.nutrition_data) {
         await commitMealToSupabase(user.id, structuredData.nutrition_data.meal);
+        handleExtractionPreview(structuredData, textInput);
         Alert.alert('Success', 'Meal logged from text input!');
       }
       setTextInput('');
@@ -119,13 +180,47 @@ export default function LogScreen() {
     }
   };
 
-  const handleDocumentPick = (type: 'pdf' | 'camera') => {
-    Alert.alert(
-      type === 'pdf' ? 'Import PDF / Plan' : 'Camera Food Scanner',
-      type === 'pdf'
-        ? 'Select a trainer routine or bloodwork lab report. The AI will extract biomarker trends and schedule workouts.'
-        : 'Snap a picture of your meal or grocery receipt for instant visual macro calculation.'
-    );
+  // Helper: Update parsed preview card
+  const handleExtractionPreview = (aiData: AIResponsePayload, contextLabel: string) => {
+    if (aiData.intent === 'LOG_NUTRITION' && aiData.nutrition_data?.meal) {
+      const meal = aiData.nutrition_data.meal;
+      setParsedPreview({
+        type: 'nutrition',
+        title: meal.description || 'Meal Logged',
+        summary: `${meal.calories} kcal | ${meal.protein}g Protein | ${meal.carbs}g Carbs | ${meal.fats}g Fats`,
+        details: [
+          { label: 'Meal Type', value: meal.meal_type },
+          { label: 'Calories', value: `${meal.calories} kcal` },
+          { label: 'Macros', value: `${meal.protein}P / ${meal.carbs}C / ${meal.fats}F` },
+          { label: 'Source', value: contextLabel },
+        ],
+      });
+    } else if (aiData.document_analysis) {
+      const doc = aiData.document_analysis;
+      setParsedPreview({
+        type: 'document',
+        title: (doc.doc_category || 'Health Document').toUpperCase(),
+        summary: doc.ai_summary,
+        details: [
+          { label: 'Category', value: doc.doc_category || 'General' },
+          { label: 'Action Items', value: `${doc.actionable_calendar_items?.length || 0} scheduled` },
+          { label: 'Biomarkers', value: `${doc.biomarker_flags?.length || 0} flagged` },
+          { label: 'File', value: contextLabel },
+        ],
+      });
+    } else if (aiData.intent === 'LOG_WORKOUT' && aiData.workout_data) {
+      const act = aiData.workout_data.activities?.[0];
+      setParsedPreview({
+        type: 'workout',
+        title: aiData.workout_data.session.title || 'Workout Session',
+        summary: aiData.workout_data.session.ai_summary || contextLabel,
+        details: [
+          { label: 'Activity', value: act?.name || 'Workout' },
+          { label: 'Volume', value: `${act?.metrics?.length || 1} set(s)` },
+          { label: 'Context', value: contextLabel },
+        ],
+      });
+    }
   };
 
   return (
@@ -142,13 +237,13 @@ export default function LogScreen() {
           {/* Top Status Header */}
           <Animated.View entering={FadeInDown.duration(600)} style={styles.header}>
             <View>
-              <Text style={styles.headerSubtitle}>VOICE & AI OMNI-LOGGER</Text>
+              <Text style={styles.headerSubtitle}>MULTIMODAL AI LOGGER</Text>
               <Text style={styles.headerTitle}>What did you do today?</Text>
             </View>
             <View style={styles.aiBadge}>
               <View style={[styles.aiBadgeDot, audioRecorder.isRecording && styles.aiBadgeDotActive]} />
               <Text style={styles.aiBadgeText}>
-                {audioRecorder.isRecording ? 'LIVE REC' : 'EXPO AUDIO'}
+                {audioRecorder.isRecording ? 'LIVE REC' : 'GEMINI + GROQ'}
               </Text>
             </View>
           </Animated.View>
@@ -188,8 +283,8 @@ export default function LogScreen() {
               {isProcessing ? (
                 <View style={styles.processingState}>
                   <ActivityIndicator size="large" color="#00F0FF" />
-                  <Text style={styles.processingText}>AI is analyzing your session...</Text>
-                  <Text style={styles.processingSub}>Groq Whisper + Llama 3 70B</Text>
+                  <Text style={styles.processingText}>{processingStatus}</Text>
+                  <Text style={styles.processingSub}>Powered by Gemini 1.5 Flash & Groq</Text>
                 </View>
               ) : (
                 <GlowingMicButton
@@ -205,7 +300,7 @@ export default function LogScreen() {
                 {audioRecorder.isRecording
                   ? 'Listening intently...'
                   : isProcessing
-                  ? 'Extracting Metrics...'
+                  ? 'Extracting Structured Metrics...'
                   : 'Tap to Voice-Dump'}
               </Text>
               <Text style={styles.micStatusDescription}>
@@ -219,7 +314,7 @@ export default function LogScreen() {
           {/* Multimodal Quick Importers: Camera & PDF Document */}
           <Animated.View entering={FadeInUp.delay(300).duration(600)} style={styles.multimodalRow}>
             <TouchableOpacity
-              onPress={() => handleDocumentPick('camera')}
+              onPress={takePhoto}
               activeOpacity={0.8}
               style={styles.multimodalBtnWrapper}
             >
@@ -231,13 +326,13 @@ export default function LogScreen() {
                 <Ionicons name="camera-outline" size={24} color="#00F0FF" />
                 <View style={styles.multimodalTextCol}>
                   <Text style={styles.multimodalTitle}>Scan Meal / Food</Text>
-                  <Text style={styles.multimodalSub}>Photo AI macro estimate</Text>
+                  <Text style={styles.multimodalSub}>Gemini vision macro check</Text>
                 </View>
               </GlassCard>
             </TouchableOpacity>
 
             <TouchableOpacity
-              onPress={() => handleDocumentPick('pdf')}
+              onPress={pickDocument}
               activeOpacity={0.8}
               style={styles.multimodalBtnWrapper}
             >
@@ -301,15 +396,33 @@ export default function LogScreen() {
               style={styles.previewContainer}
             >
               <GlassCard
-                borderColor={parsedPreview.type === 'nutrition' ? '#10B981' : '#00F0FF'}
+                borderColor={
+                  parsedPreview.type === 'nutrition'
+                    ? '#10B981'
+                    : parsedPreview.type === 'document'
+                    ? '#8B5CF6'
+                    : '#00F0FF'
+                }
                 style={styles.previewCard}
               >
                 <View style={styles.previewHeader}>
                   <View style={styles.previewTitleRow}>
                     <Ionicons
-                      name={parsedPreview.type === 'nutrition' ? 'restaurant' : 'barbell'}
+                      name={
+                        parsedPreview.type === 'nutrition'
+                          ? 'restaurant'
+                          : parsedPreview.type === 'document'
+                          ? 'document-attach'
+                          : 'barbell'
+                      }
                       size={20}
-                      color={parsedPreview.type === 'nutrition' ? '#10B981' : '#00F0FF'}
+                      color={
+                        parsedPreview.type === 'nutrition'
+                          ? '#10B981'
+                          : parsedPreview.type === 'document'
+                          ? '#A78BFA'
+                          : '#00F0FF'
+                      }
                     />
                     <Text style={styles.previewTitle}>{parsedPreview.title}</Text>
                   </View>
@@ -320,6 +433,8 @@ export default function LogScreen() {
                         backgroundColor:
                           parsedPreview.type === 'nutrition'
                             ? 'rgba(16, 185, 129, 0.15)'
+                            : parsedPreview.type === 'document'
+                            ? 'rgba(139, 92, 246, 0.15)'
                             : 'rgba(0, 240, 255, 0.15)',
                       },
                     ]}
@@ -329,7 +444,11 @@ export default function LogScreen() {
                         styles.tagBadgeText,
                         {
                           color:
-                            parsedPreview.type === 'nutrition' ? '#10B981' : '#00F0FF',
+                            parsedPreview.type === 'nutrition'
+                              ? '#10B981'
+                              : parsedPreview.type === 'document'
+                              ? '#A78BFA'
+                              : '#00F0FF',
                         },
                       ]}
                     >
@@ -461,6 +580,7 @@ const styles = StyleSheet.create({
     marginTop: 16,
     fontSize: 16,
     fontWeight: '600',
+    textAlign: 'center',
   },
   processingSub: {
     color: '#94A3B8',
