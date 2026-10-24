@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import {
   View,
   Text,
@@ -12,6 +12,14 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
+import Animated, {
+  FadeIn,
+  FadeInUp,
+  Layout,
+  withTiming,
+  useAnimatedStyle,
+  useSharedValue,
+} from 'react-native-reanimated';
 import { useDietData } from '../../hooks/useDietData';
 import { MealCard } from '../../components/MealCard';
 import { Meal } from '../../types/database.types';
@@ -41,6 +49,35 @@ export default function DietScreen() {
   const fatsConsumed = Math.round(consumedMacros.fats);
   const fatsVisualPercent = Math.min(100, Math.max(0, (fatsConsumed / fatsGoal) * 100));
   const fatsActualPercent = Math.round((fatsConsumed / fatsGoal) * 100);
+
+  // Reanimated shared values for smooth 800ms bar fills
+  const calorieProgress = useSharedValue(0);
+  const proteinProgress = useSharedValue(0);
+  const carbsProgress = useSharedValue(0);
+  const fatsProgress = useSharedValue(0);
+
+  useEffect(() => {
+    calorieProgress.value = withTiming(caloriePercent, { duration: 800 });
+    proteinProgress.value = withTiming(proteinVisualPercent, { duration: 800 });
+    carbsProgress.value = withTiming(carbsVisualPercent, { duration: 800 });
+    fatsProgress.value = withTiming(fatsVisualPercent, { duration: 800 });
+  }, [caloriePercent, proteinVisualPercent, carbsVisualPercent, fatsVisualPercent]);
+
+  const calorieAnimatedStyle = useAnimatedStyle(() => ({
+    width: `${calorieProgress.value}%`,
+  }));
+
+  const proteinAnimatedStyle = useAnimatedStyle(() => ({
+    width: `${proteinProgress.value}%`,
+  }));
+
+  const carbsAnimatedStyle = useAnimatedStyle(() => ({
+    width: `${carbsProgress.value}%`,
+  }));
+
+  const fatsAnimatedStyle = useAnimatedStyle(() => ({
+    width: `${fatsProgress.value}%`,
+  }));
 
   const handleNavigateToLog = () => {
     router.push('/(tabs)/log');
@@ -87,21 +124,16 @@ export default function DietScreen() {
           <Text style={styles.calorieUnit}>kcal</Text>
         </View>
 
-        {/* Modern Horizontal Calorie Progress Bar */}
+        {/* Modern Horizontal Calorie Progress Bar with Animation */}
         <View style={styles.calorieProgressTrack}>
-          <View
-            style={[
-              styles.calorieProgressBar,
-              { width: `${caloriePercent}%` },
-            ]}
-          >
+          <Animated.View style={[styles.calorieProgressBar, calorieAnimatedStyle]}>
             <LinearGradient
               colors={['#10B981', '#00F0FF']}
               start={{ x: 0, y: 0 }}
               end={{ x: 1, y: 0 }}
               style={StyleSheet.absoluteFillObject}
             />
-          </View>
+          </Animated.View>
         </View>
 
         {/* Calorie Stats Footer */}
@@ -132,7 +164,7 @@ export default function DietScreen() {
           <Text style={styles.macroSub}>Grams consumed today</Text>
         </View>
 
-        {/* 1. Protein Progress Bar (Green) */}
+        {/* 1. Protein Progress Bar (Green) with Reanimated Animation */}
         <View style={styles.macroBarItem}>
           <View style={styles.macroLabelRow}>
             <View style={styles.macroNameGroup}>
@@ -148,16 +180,17 @@ export default function DietScreen() {
             </View>
           </View>
           <View style={styles.macroTrack}>
-            <View
+            <Animated.View
               style={[
                 styles.macroFill,
-                { width: `${proteinVisualPercent}%`, backgroundColor: '#10B981' },
+                { backgroundColor: '#10B981' },
+                proteinAnimatedStyle,
               ]}
             />
           </View>
         </View>
 
-        {/* 2. Carbs Progress Bar (Blue) */}
+        {/* 2. Carbs Progress Bar (Blue) with Reanimated Animation */}
         <View style={styles.macroBarItem}>
           <View style={styles.macroLabelRow}>
             <View style={styles.macroNameGroup}>
@@ -173,16 +206,17 @@ export default function DietScreen() {
             </View>
           </View>
           <View style={styles.macroTrack}>
-            <View
+            <Animated.View
               style={[
                 styles.macroFill,
-                { width: `${carbsVisualPercent}%`, backgroundColor: '#38BDF8' },
+                { backgroundColor: '#38BDF8' },
+                carbsAnimatedStyle,
               ]}
             />
           </View>
         </View>
 
-        {/* 3. Fats Progress Bar (Orange) */}
+        {/* 3. Fats Progress Bar (Orange) with Reanimated Animation */}
         <View style={styles.macroBarItem}>
           <View style={styles.macroLabelRow}>
             <View style={styles.macroNameGroup}>
@@ -198,10 +232,11 @@ export default function DietScreen() {
             </View>
           </View>
           <View style={styles.macroTrack}>
-            <View
+            <Animated.View
               style={[
                 styles.macroFill,
-                { width: `${fatsVisualPercent}%`, backgroundColor: '#F59E0B' },
+                { backgroundColor: '#F59E0B' },
+                fatsAnimatedStyle,
               ]}
             />
           </View>
@@ -262,7 +297,14 @@ export default function DietScreen() {
     <SafeAreaView style={styles.container}>
       <FlatList
         data={todayMeals}
-        renderItem={({ item }: { item: Meal }) => <MealCard meal={item} />}
+        renderItem={({ item, index }: { item: Meal; index: number }) => (
+          <Animated.View
+            entering={FadeInUp.delay(index * 100).springify()}
+            layout={Layout.springify()}
+          >
+            <MealCard meal={item} />
+          </Animated.View>
+        )}
         keyExtractor={(item) => item.id}
         ListHeaderComponent={renderHeader}
         ListEmptyComponent={renderEmptyComponent}

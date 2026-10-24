@@ -11,6 +11,7 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
+import Animated, { FadeInUp, Layout } from 'react-native-reanimated';
 import { useHomeFeed, TimelineItem } from '../../hooks/useHomeFeed';
 import { StrengthCard } from '../../components/StrengthCard';
 import { CardioCard } from '../../components/CardioCard';
@@ -20,25 +21,33 @@ import { GlassCard } from '../../components/GlassCard';
 export default function HomeScreen() {
   const { data, isLoading, refetch } = useHomeFeed();
 
-  const renderItem = ({ item }: { item: TimelineItem }) => {
+  const renderItem = ({ item, index }: { item: TimelineItem; index: number }) => {
+    let content: React.ReactNode = null;
+
     // Check if the item is a Meal
     if ('meal_type' in item && item.meal_type) {
-      return <MealCard meal={item} />;
-    }
-
-    // Check if the item is a Workout Session
-    if ('type' in item) {
+      content = <MealCard meal={item} />;
+    } else if ('type' in item) {
       if (item.type === 'cardio') {
-        return <CardioCard session={item} />;
+        content = <CardioCard session={item} />;
+      } else if (item.type === 'strength' || item.type === 'hybrid') {
+        content = <StrengthCard session={item} />;
+      } else {
+        // Fallback for mobility, yoga, recovery, or other session types
+        content = <StrengthCard session={item} />;
       }
-      if (item.type === 'strength' || item.type === 'hybrid') {
-        return <StrengthCard session={item} />;
-      }
-      // Fallback for mobility, yoga, recovery, or other session types
-      return <StrengthCard session={item} />;
     }
 
-    return null;
+    if (!content) return null;
+
+    return (
+      <Animated.View
+        entering={FadeInUp.delay(index * 100).springify()}
+        layout={Layout.springify()}
+      >
+        {content}
+      </Animated.View>
+    );
   };
 
   const keyExtractor = (item: TimelineItem) => {
