@@ -10,15 +10,20 @@ import {
   KeyboardAvoidingView,
   Platform,
   Alert,
+  ActivityIndicator,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import Animated, { FadeInUp, FadeInDown, Layout } from 'react-native-reanimated';
+import { useAudioRecorder, RecordingPresets, AudioModule } from 'expo-audio';
 import { GlowingMicButton } from '../../components/GlowingMicButton';
 import { GlassCard } from '../../components/GlassCard';
+import { processAudioInput, extractJSONFromText, commitWorkoutToSupabase, commitMealToSupabase } from '../../services/aiLoggingService';
+import { useAuth } from '../../hooks/useAuth';
 
 export default function LogScreen() {
-  const [isRecording, setIsRecording] = useState(false);
+  const { user } = useAuth();
+  const [isProcessing, setIsProcessing] = useState(false);
   const [textInput, setTextInput] = useState('');
   const [activeMode, setActiveMode] = useState<'all' | 'workout' | 'nutrition' | 'document'>('all');
   const [parsedPreview, setParsedPreview] = useState<{
@@ -28,70 +33,90 @@ export default function LogScreen() {
     details: Array<{ label: string; value: string }>;
   } | null>(null);
 
-  // Simulated Voice Toggle with Live Parsing Mock
-  const handleToggleVoice = () => {
-    if (!isRecording) {
-      setIsRecording(true);
-      setParsedPreview(null);
+  // Initialize the new expo-audio hook-based recorder with high quality presets
+  const audioRecorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
+
+  // Toggle voice recording using expo-audio and process through Groq Whisper & Llama 3
+  const toggleRecording = async () => {
+    if (audioRecorder.isRecording) {
+      // 1. Stop recording
+      audioRecorder.stop();
+      setIsProcessing(true);
+
+      try {
+        const audioUri = audioRecorder.uri;
+        if (audioUri && user) {
+          // 2. Stream audio to Groq Whisper and extract structured schema with Llama 3
+          const { transcript, structuredData } = await processAudioInput(user.id, audioUri);
+
+          // 3. Render live preview breakdown card
+          if (structuredData.intent === 'LOG_WORKOUT' && structuredData.workout_data) {
+            const act = structuredData.workout_data.activities?.[0];
+            setParsedPreview({
+              type: 'workout',
+              title: structuredData.workout_data.session.title || 'Workout Session',
+              summary: structuredData.workout_data.session.ai_summary || transcript,
+              details: [
+                { label: 'Activity', value: act?.name || 'Workout' },
+                { label: 'Sets Logged', value: `${act?.metrics?.length || 1} set(s)` },
+                { label: 'Transcript', value: `"${transcript}"` },
+              ],
+            });
+            Alert.alert('Success', 'Workout session analyzed and committed to Supabase!');
+          } else if (structuredData.intent === 'LOG_NUTRITION' && structuredData.nutrition_data) {
+            const meal = structuredData.nutrition_data.meal;
+            setParsedPreview({
+              type: 'nutrition',
+              title: meal.description || 'Meal Logged',
+              summary: `${meal.calories} kcal | ${meal.protein}g Protein | ${meal.carbs}g Carbs | ${meal.fats}g Fats`,
+              details: [
+                { label: 'Meal Type', value: meal.meal_type },
+                { label: 'Calories', value: `${meal.calories} kcal` },
+                { label: 'Macros', value: `${meal.protein}P / ${meal.carbs}C / ${meal.fats}F` },
+              ],
+            });
+            Alert.alert('Success', 'Meal and nutritional macros saved to Supabase!');
+          } else {
+            Alert.alert('AI Parsed', `Recognized intent: ${structuredData.intent}`);
+          }
+        }
+      } catch (error: any) {
+        Alert.alert('Processing Error', error?.message || 'Failed to process audio. Please try again.');
+        console.error('Audio processing error:', error);
+      } finally {
+        setIsProcessing(false);
+      }
     } else {
-      setIsRecording(false);
-      // Simulate real-time LLM structured extraction output
-      setParsedPreview({
-        type: 'workout',
-        title: 'Upper Body Hypertrophy',
-        summary: 'Bench press progressive overload + incline dumbbell flys',
-        details: [
-          { label: 'Activity', value: 'Barbell Flat Bench' },
-          { label: 'Set 1', value: '100 kg × 8 reps (RPE 8)' },
-          { label: 'Set 2', value: '100 kg × 8 reps (RPE 8.5)' },
-          { label: 'Set 3', value: '100 kg × 6 reps (RPE 9.5)' },
-          { label: 'Volume', value: '2,200 kg total' },
-        ],
-      });
+      // 4. Request microphone permissions and start recording
+      const permission = await AudioModule.requestRecordingPermissionsAsync();
+      if (permission.granted) {
+        audioRecorder.record();
+      } else {
+        Alert.alert('Permission Denied', 'Please enable microphone access in your system settings.');
+      }
     }
   };
 
-  const handleTextSubmit = () => {
-    if (!textInput.trim()) return;
+  // Alternative manual text submission through the LLM parser
+  const handleTextSubmit = async () => {
+    if (!textInput.trim() || !user) return;
+    setIsProcessing(true);
 
-    // Check if food or cardio or strength
-    const lower = textInput.toLowerCase();
-    if (lower.includes('run') || lower.includes('km') || lower.includes('pace')) {
-      setParsedPreview({
-        type: 'workout',
-        title: 'Morning Tempo Run',
-        summary: 'Extracted 5km outdoor road run with target aerobic pace',
-        details: [
-          { label: 'Distance', value: '5.00 km' },
-          { label: 'Time', value: '24 min 30 sec' },
-          { label: 'Pace', value: '4:54 /km' },
-          { label: 'Avg HR', value: '158 bpm' },
-        ],
-      });
-    } else if (lower.includes('egg') || lower.includes('protein') || lower.includes('calories') || lower.includes('toast')) {
-      setParsedPreview({
-        type: 'nutrition',
-        title: 'Power Breakfast',
-        summary: 'Scrambled eggs, whole wheat toast & avocado',
-        details: [
-          { label: 'Calories', value: '540 kcal' },
-          { label: 'Protein', value: '32 g' },
-          { label: 'Carbohydrates', value: '45 g' },
-          { label: 'Healthy Fats', value: '22 g' },
-        ],
-      });
-    } else {
-      setParsedPreview({
-        type: 'workout',
-        title: 'Manual Exercise Session',
-        summary: textInput,
-        details: [
-          { label: 'Status', value: 'Formatted for Supabase JSONB payload' },
-          { label: 'Confidence', value: '98% (Gemini Flash)' },
-        ],
-      });
+    try {
+      const structuredData = await extractJSONFromText(textInput);
+      if (structuredData.intent === 'LOG_WORKOUT' && structuredData.workout_data) {
+        await commitWorkoutToSupabase(user.id, structuredData.workout_data, textInput);
+        Alert.alert('Success', 'Workout logged from text input!');
+      } else if (structuredData.intent === 'LOG_NUTRITION' && structuredData.nutrition_data) {
+        await commitMealToSupabase(user.id, structuredData.nutrition_data.meal);
+        Alert.alert('Success', 'Meal logged from text input!');
+      }
+      setTextInput('');
+    } catch (err: any) {
+      Alert.alert('Error', err?.message || 'Failed to parse text input.');
+    } finally {
+      setIsProcessing(false);
     }
-    setTextInput('');
   };
 
   const handleDocumentPick = (type: 'pdf' | 'camera') => {
@@ -117,16 +142,18 @@ export default function LogScreen() {
           {/* Top Status Header */}
           <Animated.View entering={FadeInDown.duration(600)} style={styles.header}>
             <View>
-              <Text style={styles.headerSubtitle}>OMNI-LOGGING ENGINE</Text>
-              <Text style={styles.headerTitle}>What did you conquer?</Text>
+              <Text style={styles.headerSubtitle}>VOICE & AI OMNI-LOGGER</Text>
+              <Text style={styles.headerTitle}>What did you do today?</Text>
             </View>
             <View style={styles.aiBadge}>
-              <View style={styles.aiBadgeDot} />
-              <Text style={styles.aiBadgeText}>AI READY</Text>
+              <View style={[styles.aiBadgeDot, audioRecorder.isRecording && styles.aiBadgeDotActive]} />
+              <Text style={styles.aiBadgeText}>
+                {audioRecorder.isRecording ? 'LIVE REC' : 'EXPO AUDIO'}
+              </Text>
             </View>
           </Animated.View>
 
-          {/* Mode Selector Chips */}
+          {/* Quick Mode Filters */}
           <Animated.View entering={FadeInDown.delay(100).duration(600)} style={styles.modesRow}>
             {(['all', 'workout', 'nutrition', 'document'] as const).map((mode) => (
               <TouchableOpacity
@@ -155,22 +182,36 @@ export default function LogScreen() {
             ))}
           </Animated.View>
 
-          {/* Central Hero Voice Stage */}
+          {/* Central Hero Voice Stage with expo-audio */}
           <Animated.View entering={FadeInUp.delay(200).duration(600)} style={styles.voiceSection}>
-            <GlowingMicButton
-              isListening={isRecording}
-              onPress={handleToggleVoice}
-              size={88}
-            />
+            <View style={styles.micContainer}>
+              {isProcessing ? (
+                <View style={styles.processingState}>
+                  <ActivityIndicator size="large" color="#00F0FF" />
+                  <Text style={styles.processingText}>AI is analyzing your session...</Text>
+                  <Text style={styles.processingSub}>Groq Whisper + Llama 3 70B</Text>
+                </View>
+              ) : (
+                <GlowingMicButton
+                  isListening={audioRecorder.isRecording}
+                  onPress={toggleRecording}
+                  size={88}
+                />
+              )}
+            </View>
 
             <View style={styles.micStatusContainer}>
               <Text style={styles.micStatusTitle}>
-                {isRecording ? 'Listening intently...' : 'Tap to Voice-Dump'}
+                {audioRecorder.isRecording
+                  ? 'Listening intently...'
+                  : isProcessing
+                  ? 'Extracting Metrics...'
+                  : 'Tap to Voice-Dump'}
               </Text>
               <Text style={styles.micStatusDescription}>
-                {isRecording
-                  ? 'Speak naturally: "Did 4 sets of squats 140kg, then had 300g greek yogurt"'
-                  : 'Say any workout, run splits, meal, or ask a performance question'}
+                {audioRecorder.isRecording
+                  ? 'Listening... Tap again when finished speaking.'
+                  : 'Tap to log a workout, run splits, meal, or ask a performance question.'}
               </Text>
             </View>
           </Animated.View>
@@ -189,7 +230,7 @@ export default function LogScreen() {
                 />
                 <Ionicons name="camera-outline" size={24} color="#00F0FF" />
                 <View style={styles.multimodalTextCol}>
-                  <Text style={styles.multimodalTitle}>Scan Meal / Barcode</Text>
+                  <Text style={styles.multimodalTitle}>Scan Meal / Food</Text>
                   <Text style={styles.multimodalSub}>Photo AI macro estimate</Text>
                 </View>
               </GlassCard>
@@ -225,7 +266,7 @@ export default function LogScreen() {
               <TextInput
                 value={textInput}
                 onChangeText={setTextInput}
-                placeholder="e.g. 5km run in 24:30 at 158bpm OR 3 eggs and oatmeal"
+                placeholder="e.g. 5km run in 24:30 at 158bpm OR 3 eggs and avocado toast"
                 placeholderTextColor="#64748B"
                 multiline
                 numberOfLines={3}
@@ -233,7 +274,7 @@ export default function LogScreen() {
               />
 
               <View style={styles.inputFooter}>
-                <Text style={styles.inputHint}>AI will automatically normalize units & schema</Text>
+                <Text style={styles.inputHint}>AI parses and normalizes units into Supabase</Text>
                 <TouchableOpacity
                   onPress={handleTextSubmit}
                   activeOpacity={0.8}
@@ -252,7 +293,7 @@ export default function LogScreen() {
             </GlassCard>
           </Animated.View>
 
-          {/* AI Parsed Result Preview (Simulated Real-time Confirmation) */}
+          {/* AI Parsed Result Preview */}
           {parsedPreview && (
             <Animated.View
               entering={FadeInUp.duration(500)}
@@ -266,13 +307,7 @@ export default function LogScreen() {
                 <View style={styles.previewHeader}>
                   <View style={styles.previewTitleRow}>
                     <Ionicons
-                      name={
-                        parsedPreview.type === 'nutrition'
-                          ? 'restaurant'
-                          : parsedPreview.type === 'document'
-                          ? 'document-attach'
-                          : 'barbell'
-                      }
+                      name={parsedPreview.type === 'nutrition' ? 'restaurant' : 'barbell'}
                       size={20}
                       color={parsedPreview.type === 'nutrition' ? '#10B981' : '#00F0FF'}
                     />
@@ -298,7 +333,7 @@ export default function LogScreen() {
                         },
                       ]}
                     >
-                      PARSED OK
+                      SAVED TO SUPABASE
                     </Text>
                   </View>
                 </View>
@@ -313,25 +348,6 @@ export default function LogScreen() {
                     </View>
                   ))}
                 </View>
-
-                <TouchableOpacity
-                  activeOpacity={0.8}
-                  onPress={() => {
-                    Alert.alert('Saved to Supabase', 'Polymorphic metric payload committed successfully.');
-                    setParsedPreview(null);
-                  }}
-                  style={styles.commitBtn}
-                >
-                  <LinearGradient
-                    colors={['#10B981', '#059669']}
-                    start={{ x: 0, y: 0 }}
-                    end={{ x: 1, y: 1 }}
-                    style={styles.commitGradient}
-                  >
-                    <Ionicons name="checkmark-circle" size={18} color="#FFFFFF" />
-                    <Text style={styles.commitBtnText}>Commit to Database</Text>
-                  </LinearGradient>
-                </TouchableOpacity>
               </GlassCard>
             </Animated.View>
           )}
@@ -391,6 +407,9 @@ const styles = StyleSheet.create({
     backgroundColor: '#00F0FF',
     marginRight: 6,
   },
+  aiBadgeDotActive: {
+    backgroundColor: '#EF4444',
+  },
   aiBadgeText: {
     fontSize: 10,
     fontWeight: '700',
@@ -401,7 +420,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: 8,
-    marginBottom: 28,
+    marginBottom: 24,
   },
   modeChip: {
     paddingHorizontal: 14,
@@ -426,11 +445,31 @@ const styles = StyleSheet.create({
   },
   voiceSection: {
     alignItems: 'center',
-    marginVertical: 12,
+    marginVertical: 10,
+  },
+  micContainer: {
+    height: 200,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  processingState: {
+    alignItems: 'center',
+    padding: 20,
+  },
+  processingText: {
+    color: '#00F0FF',
+    marginTop: 16,
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  processingSub: {
+    color: '#94A3B8',
+    marginTop: 4,
+    fontSize: 12,
   },
   micStatusContainer: {
     alignItems: 'center',
-    marginTop: 18,
+    marginTop: 12,
     paddingHorizontal: 20,
   },
   micStatusTitle: {
@@ -448,7 +487,7 @@ const styles = StyleSheet.create({
   multimodalRow: {
     flexDirection: 'row',
     gap: 12,
-    marginVertical: 24,
+    marginVertical: 20,
   },
   multimodalBtnWrapper: {
     flex: 1,
@@ -578,24 +617,7 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: '#F8FAFC',
   },
-  commitBtn: {
-    marginTop: 14,
-    borderRadius: 14,
-    overflow: 'hidden',
-  },
-  commitGradient: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 12,
-    gap: 8,
-  },
-  commitBtnText: {
-    color: '#FFFFFF',
-    fontWeight: '700',
-    fontSize: 14,
-  },
   bottomSpacer: {
-    height: 100, // Clearance for floating tab bar
+    height: 100,
   },
 });
