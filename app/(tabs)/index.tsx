@@ -1,71 +1,146 @@
 import React from 'react';
-import { View, Text, StyleSheet, ScrollView, SafeAreaView, TouchableOpacity } from 'react-native';
+import {
+  View,
+  Text,
+  StyleSheet,
+  SafeAreaView,
+  FlatList,
+  RefreshControl,
+  ActivityIndicator,
+  TouchableOpacity,
+} from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
+import { useHomeFeed, TimelineItem } from '../../hooks/useHomeFeed';
+import { StrengthCard } from '../../components/StrengthCard';
+import { CardioCard } from '../../components/CardioCard';
+import { MealCard } from '../../components/MealCard';
 import { GlassCard } from '../../components/GlassCard';
 
 export default function HomeScreen() {
+  const { data, isLoading, refetch } = useHomeFeed();
+
+  const renderItem = ({ item }: { item: TimelineItem }) => {
+    // Check if the item is a Meal
+    if ('meal_type' in item && item.meal_type) {
+      return <MealCard meal={item} />;
+    }
+
+    // Check if the item is a Workout Session
+    if ('type' in item) {
+      if (item.type === 'cardio') {
+        return <CardioCard session={item} />;
+      }
+      if (item.type === 'strength' || item.type === 'hybrid') {
+        return <StrengthCard session={item} />;
+      }
+      // Fallback for mobility, yoga, recovery, or other session types
+      return <StrengthCard session={item} />;
+    }
+
+    return null;
+  };
+
+  const keyExtractor = (item: TimelineItem) => {
+    if ('meal_type' in item) {
+      return `meal-${item.id}`;
+    }
+    return `session-${item.id}`;
+  };
+
+  const renderHeader = () => (
+    <View style={styles.headerContainer}>
+      {/* Top Greeting & Streak */}
+      <View style={styles.greetingRow}>
+        <View>
+          <Text style={styles.greetingSub}>GOOD MORNING, ATHLETE</Text>
+          <Text style={styles.greetingTitle}>Daily Readiness</Text>
+        </View>
+        <View style={styles.streakBadge}>
+          <Ionicons name="flame" size={16} color="#FF7A00" />
+          <Text style={styles.streakText}>14 Days</Text>
+        </View>
+      </View>
+
+      {/* Hero Card: Today's AI Suggested Session */}
+      <GlassCard style={styles.heroCard} borderColor="#00F0FF">
+        <LinearGradient
+          colors={['rgba(0, 240, 255, 0.12)', 'rgba(99, 102, 241, 0.05)']}
+          style={StyleSheet.absoluteFillObject}
+        />
+        <View style={styles.heroBadgeRow}>
+          <View style={styles.categoryBadge}>
+            <Text style={styles.categoryBadgeText}>HYBRID PROGRAM</Text>
+          </View>
+          <Text style={styles.durationText}>55 MIN</Text>
+        </View>
+        <Text style={styles.heroTitle}>Lower Body Power & 3km Flush Run</Text>
+        <Text style={styles.heroDesc}>
+          AI adapted today's load: Squats (4x6 @ 80%), followed by low-intensity zone-2 flush.
+        </Text>
+        <TouchableOpacity style={styles.heroBtn}>
+          <Text style={styles.heroBtnText}>Start Guided Session</Text>
+          <Ionicons name="arrow-forward" size={16} color="#000000" />
+        </TouchableOpacity>
+      </GlassCard>
+
+      {/* Timeline Section Title */}
+      <View style={styles.timelineSectionHeader}>
+        <View>
+          <Text style={styles.sectionSubtitle}>CHRONOLOGICAL STREAM</Text>
+          <Text style={styles.sectionTitle}>Activity Timeline</Text>
+        </View>
+        {data.length > 0 && (
+          <View style={styles.countBadge}>
+            <Text style={styles.countBadgeText}>{data.length} logs</Text>
+          </View>
+        )}
+      </View>
+    </View>
+  );
+
+  const renderEmptyComponent = () => {
+    if (isLoading) {
+      return (
+        <View style={styles.emptyContainer}>
+          <ActivityIndicator size="small" color="#00F0FF" />
+          <Text style={styles.emptyLoadingText}>Loading timeline activity...</Text>
+        </View>
+      );
+    }
+
+    return (
+      <View style={styles.emptyContainer}>
+        <View style={styles.emptyIconCircle}>
+          <Ionicons name="calendar-outline" size={28} color="#94A3B8" />
+        </View>
+        <Text style={styles.emptyTitle}>No activity logged yet</Text>
+        <Text style={styles.emptyText}>
+          Workouts, cardio sessions, and meals will appear here chronologically as you log them.
+        </Text>
+      </View>
+    );
+  };
+
   return (
     <SafeAreaView style={styles.container}>
-      <ScrollView contentContainerStyle={styles.content}>
-        {/* Header */}
-        <View style={styles.header}>
-          <View>
-            <Text style={styles.greeting}>GOOD MORNING, ATHLETE</Text>
-            <Text style={styles.title}>Daily Readiness</Text>
-          </View>
-          <View style={styles.streakBadge}>
-            <Ionicons name="flame" size={16} color="#FF7A00" />
-            <Text style={styles.streakText}>14 Days</Text>
-          </View>
-        </View>
-
-        {/* Hero Card: Today's AI Suggested Session */}
-        <GlassCard style={styles.heroCard} borderColor="#00F0FF">
-          <LinearGradient
-            colors={['rgba(0, 240, 255, 0.12)', 'rgba(99, 102, 241, 0.05)']}
-            style={StyleSheet.absoluteFillObject}
+      <FlatList
+        data={data}
+        renderItem={renderItem}
+        keyExtractor={keyExtractor}
+        ListHeaderComponent={renderHeader}
+        ListEmptyComponent={renderEmptyComponent}
+        contentContainerStyle={styles.contentList}
+        refreshControl={
+          <RefreshControl
+            refreshing={isLoading}
+            onRefresh={refetch}
+            tintColor="#00F0FF"
+            colors={['#00F0FF']}
           />
-          <View style={styles.heroBadgeRow}>
-            <View style={styles.categoryBadge}>
-              <Text style={styles.categoryBadgeText}>HYBRID PROGRAM</Text>
-            </View>
-            <Text style={styles.durationText}>55 MIN</Text>
-          </View>
-          <Text style={styles.heroTitle}>Lower Body Power & 3km Flush Run</Text>
-          <Text style={styles.heroDesc}>
-            AI adapted today's load: Squats (4x6 @ 80%), followed by low-intensity zone-2 flush.
-          </Text>
-          <TouchableOpacity style={styles.heroBtn}>
-            <Text style={styles.heroBtnText}>Start Guided Session</Text>
-            <Ionicons name="arrow-forward" size={16} color="#000000" />
-          </TouchableOpacity>
-        </GlassCard>
-
-        {/* Nutrition Macro Summary */}
-        <View style={styles.sectionHeader}>
-          <Text style={styles.sectionTitle}>Macro Targets</Text>
-          <Text style={styles.sectionSub}>1,840 / 2,500 kcal</Text>
-        </View>
-
-        <View style={styles.macrosRow}>
-          <GlassCard style={styles.macroCard}>
-            <Text style={styles.macroValue}>142g</Text>
-            <Text style={styles.macroLabel}>Protein / 180g</Text>
-            <View style={[styles.progressBar, { width: '78%', backgroundColor: '#00F0FF' }]} />
-          </GlassCard>
-          <GlassCard style={styles.macroCard}>
-            <Text style={styles.macroValue}>190g</Text>
-            <Text style={styles.macroLabel}>Carbs / 250g</Text>
-            <View style={[styles.progressBar, { width: '76%', backgroundColor: '#10B981' }]} />
-          </GlassCard>
-          <GlassCard style={styles.macroCard}>
-            <Text style={styles.macroValue}>48g</Text>
-            <Text style={styles.macroLabel}>Fats / 70g</Text>
-            <View style={[styles.progressBar, { width: '68%', backgroundColor: '#F59E0B' }]} />
-          </GlassCard>
-        </View>
-      </ScrollView>
+        }
+        showsVerticalScrollIndicator={false}
+      />
     </SafeAreaView>
   );
 }
@@ -75,23 +150,27 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#0A0A0E',
   },
-  content: {
+  contentList: {
     padding: 20,
-    paddingBottom: 110,
+    paddingBottom: 120,
   },
-  header: {
+  headerContainer: {
+    marginBottom: 8,
+  },
+  greetingRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 24,
+    marginBottom: 20,
+    marginTop: 4,
   },
-  greeting: {
+  greetingSub: {
     fontSize: 11,
     fontWeight: '700',
     color: '#00F0FF',
     letterSpacing: 1.5,
   },
-  title: {
+  greetingTitle: {
     fontSize: 28,
     fontWeight: '800',
     color: '#FFFFFF',
@@ -113,7 +192,7 @@ const styles = StyleSheet.create({
   },
   heroCard: {
     padding: 20,
-    marginBottom: 28,
+    marginBottom: 24,
   },
   heroBadgeRow: {
     flexDirection: 'row',
@@ -162,44 +241,72 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     fontSize: 14,
   },
-  sectionHeader: {
+  timelineSectionHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    alignItems: 'baseline',
+    alignItems: 'flex-end',
     marginBottom: 14,
+    marginTop: 4,
+  },
+  sectionSubtitle: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#94A3B8',
+    letterSpacing: 1.5,
   },
   sectionTitle: {
-    fontSize: 18,
-    fontWeight: '700',
-    color: '#FFFFFF',
-  },
-  sectionSub: {
-    fontSize: 12,
-    color: '#94A3B8',
-  },
-  macrosRow: {
-    flexDirection: 'row',
-    gap: 10,
-  },
-  macroCard: {
-    flex: 1,
-    padding: 14,
-    alignItems: 'center',
-  },
-  macroValue: {
-    fontSize: 18,
+    fontSize: 20,
     fontWeight: '800',
     color: '#FFFFFF',
-  },
-  macroLabel: {
-    fontSize: 10,
-    color: '#94A3B8',
     marginTop: 2,
-    marginBottom: 8,
   },
-  progressBar: {
-    height: 4,
-    borderRadius: 2,
-    alignSelf: 'stretch',
+  countBadge: {
+    backgroundColor: 'rgba(255, 255, 255, 0.08)',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 8,
+  },
+  countBadgeText: {
+    color: '#94A3B8',
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  emptyContainer: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 40,
+    paddingHorizontal: 20,
+    backgroundColor: 'rgba(255, 255, 255, 0.03)',
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.06)',
+    marginTop: 10,
+  },
+  emptyIconCircle: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: 'rgba(255, 255, 255, 0.05)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 12,
+  },
+  emptyLoadingText: {
+    color: '#94A3B8',
+    fontSize: 13,
+    marginTop: 10,
+    fontWeight: '500',
+  },
+  emptyTitle: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: '700',
+    marginBottom: 6,
+  },
+  emptyText: {
+    color: '#94A3B8',
+    fontSize: 13,
+    textAlign: 'center',
+    lineHeight: 18,
   },
 });
